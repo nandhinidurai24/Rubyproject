@@ -1,0 +1,70 @@
+# This references the default Ruby container from
+# the Docker Hub.
+# https://registry.hub.docker.com/_/ruby/
+# If you want to use a specific version you would use a tag:
+# ruby:2.2.2
+box: ruby:2.1.7
+
+# You can also use services such as databases. Read more on our dev center:
+# http://devcenter.wercker.com/docs/services/index.html
+services:
+  - id: postgres
+    env:
+      POSTGRES_USER: test_user
+      POSTGRES_PASSWORD: test_password
+
+    # - mongodb
+    # http://devcenter.wercker.com/docs/services/mongodb.html
+
+# This is the build pipeline. Pipelines are the core of wercker
+# Read more about pipelines on our dev center
+# http://devcenter.wercker.com/docs/pipelines/index.html
+build:
+  # Steps make up the actions in your pipeline
+  # Read more about steps on our dev center:
+  # http://devcenter.wercker.com/docs/steps/index.html
+  steps:
+    - script:
+      name: install private RSA key
+      code: |
+        mkdir -p ~/.ssh/
+        echo -ne $PRIVATE_RSA_KEY | base64 --decode > ~/.ssh/id_rsa
+    - script:
+      name: install Google Chrome
+      code: |
+        # Add Google public key to apt
+        wget -q -O - "https://dl-ssl.google.com/linux/linux_signing_key.pub" | sudo apt-key add -
+        # Add Google to the apt-get source list
+        sudo echo 'deb http://dl.google.com/linux/chrome/deb/ stable main' >> /etc/apt/sources.list
+        # Update app-get
+        sudo apt-get update -y
+        # Install Google Chrome, retry up to 5 times - some package repos might be missing
+        for i in 1 2 3 4 5; do sudo apt-get install -y google-chrome-stable && break || sleep 15; done
+    - install-packages:
+      name: install required packages
+      packages: unzip xvfb libgtkmm-2.4 libgtkmm-3.0 libnotify-bin
+    - script:
+      name: install chromedriver
+      code: |
+        wget -O /tmp/chromedriver.zip http://chromedriver.storage.googleapis.com/2.21/chromedriver_linux64.zip
+        sudo unzip /tmp/chromedriver.zip chromedriver -d /usr/local/bin/
+        chmod +x /usr/local/bin/chromedriver
+    - rails-database-yml
+    - bundle-install
+    - script:
+      name: starting xvfb
+      code: |
+        # Start xvfb which gives the context an virtual display
+        # which is required for tests that require an GUI
+        export DISPLAY=:99.0
+        start-stop-daemon --start --quiet --pidfile /tmp/xvfb_99.pid --make-pidfile --background --exec /usr/bin/Xvfb -- :99 -screen 0 1024x768x24 -ac +extension GLX +render -noreset
+        # Give xvfb time to start. 3 seconds is the default for all xvfb-run commands.
+        sleep 3
+    - script:
+      name: rspec
+      code: bundle exec rspec
+    - script:
+      name: deploy if main branch
+      code: |
+        echo "Current branch: $WERCKER_GIT_BRANCH"
+        if [ "$WERCKER_GIT_BRANCH" == 'master' ]; then cap staging deploy; else echo 'Not on main branch, skipping deploy'; fi
